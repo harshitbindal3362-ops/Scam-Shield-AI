@@ -5,59 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// ─── OmniDimension types ────────────────────────────────────────────────────
-
-declare global {
-  interface Window {
-    OmniDim?: { speak: (text: string) => void };
-    omnidimWidget?: { speak?: (text: string) => void };
-    OmniDimWidget?: { speak?: (text: string) => void };
-    _omniDimQueue?: string[];
-    _omniDimOnReady?: (widget: any) => void;
-  }
-}
-
-// ─── Agent voice via OmniDimension (real human-quality AI voice) ────────────
-
-/** Estimate reading duration in ms for a piece of text. */
-function estimateDuration(text: string): number {
-  // Average speaking pace ~140 wpm → ~700ms per word
-  const words = text.trim().split(/\s+/).length;
-  return Math.max(2500, words * 650);
-}
-
-/** Is the real OmniDim widget loaded and exposing speak()? */
-function omniDimAvailable(): boolean {
-  return (
-    (!!window.omnidimWidget && typeof window.omnidimWidget.speak === "function") ||
-    (!!window.OmniDimWidget && typeof window.OmniDimWidget.speak === "function")
-  );
-}
-
-/**
- * Speak agent text using OmniDimension's real AI voice.
- * Returns a Promise that resolves when the estimated speech duration elapses.
- * Falls back to browser TTS if OmniDim is not loaded.
- */
-export function speakAgent(text: string): Promise<void> {
-  // Try real OmniDim widget first
-  if (omniDimAvailable()) {
-    const widget = window.omnidimWidget || window.OmniDimWidget;
-    widget!.speak!(text);
-    // OmniDim doesn't fire an end event via JS, so wait estimated time
-    return new Promise((resolve) => setTimeout(resolve, estimateDuration(text)));
-  }
-
-  // OmniDim not ready — use browser TTS as fallback (agent profile)
-  return speakBrowser(text, "agent");
-}
-
-/** Legacy helper used by session detail page. */
-export function playVoice(text: string) {
-  speakAgent(text).catch(() => {});
-}
-
-// ─── Browser Speech Synthesis (scammer side + agent fallback) ────────────────
+// ─── Browser Speech Synthesis ────────────────────────────────────────────────
 
 function pickVoice(
   voices: SpeechSynthesisVoice[],
@@ -76,7 +24,6 @@ function pickVoice(
       voices[0]
     );
   } else {
-    // Agent fallback — prefer a distinctly different voice from scammer
     return (
       voices.find((v) => v.name === "Google UK English Female") ||
       voices.find((v) => /google/i.test(v.name) && /en-IN|hi/i.test(v.lang)) ||
@@ -102,12 +49,12 @@ export function speakBrowser(
     const utter = new SpeechSynthesisUtterance(text);
 
     if (role === "scammer") {
-      utter.rate  = 1.05;
-      utter.pitch = 1.0;
+      utter.rate   = 1.05;
+      utter.pitch  = 1.0;
       utter.volume = 1.0;
     } else {
-      utter.rate  = 0.93;
-      utter.pitch = 0.95;
+      utter.rate   = 0.93;
+      utter.pitch  = 0.95;
       utter.volume = 1.0;
     }
 
@@ -117,7 +64,7 @@ export function speakBrowser(
       if (v) utter.voice = v;
 
       const timeout = setTimeout(() => { window.speechSynthesis.cancel(); resolve(); }, 20000);
-      utter.onend  = () => { clearTimeout(timeout); resolve(); };
+      utter.onend   = () => { clearTimeout(timeout); resolve(); };
       utter.onerror = () => { clearTimeout(timeout); resolve(); };
       window.speechSynthesis.speak(utter);
     };
@@ -136,4 +83,14 @@ export function speakBrowser(
 
 export function stopSpeech() {
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+}
+
+/** Legacy helper used by session detail page */
+export function playVoice(text: string) {
+  speakBrowser(text, "agent").catch(() => {});
+}
+
+/** Legacy export kept for compatibility */
+export async function speakAgent(text: string): Promise<void> {
+  return speakBrowser(text, "agent");
 }

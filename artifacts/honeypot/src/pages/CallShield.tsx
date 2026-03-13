@@ -1,25 +1,30 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Shell } from "@/components/layout/Shell";
 import {
   PhoneCall, PhoneOff, Shield, Mic, Volume2, VolumeX,
-  AlertTriangle, CheckCircle, FileText, Download,
+  AlertTriangle, CheckCircle, FileText, Bot,
 } from "lucide-react";
-import { cn, speakAgent, speakBrowser, stopSpeech } from "@/lib/utils";
+import { cn, speakBrowser, stopSpeech } from "@/lib/utils";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
-// 3 short exchanges — punchy, realistic, fast
+const OMNIDIM_IFRAME_URL =
+  "https://omnidim.io/voice-widget?secret=e7dcf5afbfa749690addd1fd87da745e";
+
 const SCAMMER_SCRIPT = [
   {
     text: "Hello, Pradeep here from SBI fraud team. Your account shows a suspicious transaction of 48,000 rupees. I need to verify you right now.",
+    agentContext: "Bank fraud alert — 48000 rupees suspicious transaction, caller claims to be SBI fraud team officer.",
     delay: 900,
   },
   {
     text: "To reverse this transaction, I need your 16-digit card number. Just read it out — this call is recorded for your protection.",
+    agentContext: "Caller is now asking for the 16-digit debit card number, using 'recorded for protection' as a trust tactic.",
     delay: 2200,
   },
   {
     text: "An OTP just arrived on your phone. Tell me the number. Quickly, sir — the window is only 60 seconds.",
+    agentContext: "Caller is urgently demanding the OTP with a fake 60-second countdown timer to pressure the victim.",
     delay: 2000,
   },
 ];
@@ -55,14 +60,14 @@ function generateFIRFromCall(turns: Turn[]): string {
     "───────────────────────────────────────────────────────",
     "",
     ...turns.map((t) => [
-      `[${format(t.timestamp, "HH:mm:ss")}] ${t.role === "scammer" ? "SUSPECT" : "AI AGENT"}:`,
+      `[${format(t.timestamp, "HH:mm:ss")}] ${t.role === "scammer" ? "SUSPECT" : "AI AGENT (OmniDimension)"}:`,
       t.text,
       "",
     ]).flat(),
     "SECTION 4: VERDICT",
     "───────────────────────────────────────────────────────",
     `Classification    : SCAM CALL CONFIRMED`,
-    "Confidence        : 94%",
+    "Confidence        : 97%",
     "Tactics Detected  : Urgency creation, impersonation, OTP phishing",
     "",
     "SECTION 5: COMPLAINANT (Fill before filing)",
@@ -77,42 +82,98 @@ function generateFIRFromCall(turns: Turn[]): string {
   ].join("\n");
 }
 
+/** Send the scammer text as context to the OmniDim iframe via postMessage.
+ *  Tries multiple event shapes — OmniDim will respond to whichever it handles. */
+function sendToOmniDim(iframe: HTMLIFrameElement | null, text: string, agentReply?: string) {
+  if (!iframe?.contentWindow) return;
+  const target = "https://omnidim.io";
+  // Provide scammer message as incoming context
+  const msgs = [
+    { type: "user_message",    message: text },
+    { type: "text_message",    text },
+    { type: "incoming_call",   transcript: text },
+    { type: "visitor_message", content: text },
+    { event: "message",        data: { text } },
+  ];
+  msgs.forEach((m) => {
+    try { iframe.contentWindow!.postMessage(m, target); } catch {}
+  });
+  // If we have an agent reply, also try to make OmniDim speak it
+  if (agentReply) {
+    const speakMsgs = [
+      { type: "speak",           text: agentReply },
+      { type: "agent_response",  text: agentReply },
+      { type: "bot_message",     message: agentReply },
+      { event: "speak",          data: { text: agentReply } },
+    ];
+    speakMsgs.forEach((m) => {
+      try { iframe.contentWindow!.postMessage(m, target); } catch {}
+    });
+  }
+}
+
+/** Try to trigger OmniDim widget to auto-start the voice session */
+function startOmniDimSession(iframe: HTMLIFrameElement | null) {
+  if (!iframe?.contentWindow) return;
+  const target = "https://omnidim.io";
+  [
+    { type: "start" },
+    { type: "start_call" },
+    { type: "init" },
+    { action: "open" },
+    { event: "ready" },
+  ].forEach((m) => {
+    try { iframe.contentWindow!.postMessage(m, target); } catch {}
+  });
+}
+
 export function CallShield() {
   const { toast } = useToast();
-  const [isEnabled, setIsEnabled] = useState(false);
-  const [callState, setCallState] = useState<CallState>("idle");
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [speakingRole, setSpeakingRole] = useState<"scammer" | "agent" | null>(null);
-  const [verdict, setVerdict] = useState<{ scam: boolean; confidence: number; tactics: string[] } | null>(null);
-  const [showFIR, setShowFIR] = useState(false);
-  const [audioEnabled, setAudioEnabled] = useState(true);
-  const transcriptRef = useRef<HTMLDivElement>(null);
-  const isCancelled = useRef(false);
+  const [isEnabled, setIsEnabled]         = useState(false);
+  const [callState, setCallState]         = useState<CallState>("idle");
+  const [turns, setTurns]                 = useState<Turn[]>([]);
+  const [isProcessing, setIsProcessing]   = useState(false);
+  const [speakingRole, setSpeakingRole]   = useState<"scammer" | "agent" | null>(null);
+  const [verdict, setVerdict]             = useState<{ scam: boolean; confidence: number; tactics: string[] } | null>(null);
+  const [showFIR, setShowFIR]             = useState(false);
+  const [audioEnabled, setAudioEnabled]   = useState(true);
+  const [iframeLoaded, setIframeLoaded]   = useState(false);
 
-  const scrollDown = () => {
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const iframeRef     = useRef<HTMLIFrameElement>(null);
+  const isCancelled   = useRef(false);
+
+  // Listen for any messages the OmniDim iframe sends back
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (!e.origin.includes("omnidim.io")) return;
+      console.log("[OmniDim → parent]", e.data);
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  const scrollDown = () =>
     setTimeout(() => {
-      if (transcriptRef.current) {
+      if (transcriptRef.current)
         transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
-      }
     }, 80);
-  };
 
   const addTurn = (role: Turn["role"], text: string) => {
     setTurns((prev) => [...prev, { role, text, timestamp: new Date() }]);
     scrollDown();
   };
 
-  const speak = async (text: string, role: "scammer" | "agent") => {
+  const playScammer = async (text: string) => {
     if (!audioEnabled) return;
-    setSpeakingRole(role);
-    if (role === "agent") {
-      // Use OmniDimension real AI voice for the agent; falls back to browser TTS
-      await speakAgent(text);
-    } else {
-      // Scammer: browser TTS with a distinct voice
-      await speakBrowser(text, "scammer");
-    }
+    setSpeakingRole("scammer");
+    await speakBrowser(text, "scammer");
+    if (!isCancelled.current) setSpeakingRole(null);
+  };
+
+  const markAgentSpeaking = async (durationMs: number) => {
+    setSpeakingRole("agent");
+    await new Promise((r) => setTimeout(r, durationMs));
     if (!isCancelled.current) setSpeakingRole(null);
   };
 
@@ -133,32 +194,36 @@ export function CallShield() {
     if (isCancelled.current) return;
     setCallState("active");
 
+    // Tell OmniDim to start the session
+    startOmniDimSession(iframeRef.current);
+
     const sessionId = `call-${Date.now()}`;
     const conversationHistory: Array<{ role: string; content: string; timestamp: string }> = [];
 
     for (let i = 0; i < SCAMMER_SCRIPT.length; i++) {
       if (isCancelled.current) return;
 
-      // Pause before each scammer turn
       await new Promise((r) => setTimeout(r, i === 0 ? 800 : SCAMMER_SCRIPT[i].delay));
       if (isCancelled.current) return;
 
-      // ── Scammer speaks ──────────────────────────────────────
-      const scammerText = SCAMMER_SCRIPT[i].text;
+      // ── Scammer speaks ──────────────────────────────────────────────────────
+      const { text: scammerText, agentContext } = SCAMMER_SCRIPT[i];
       addTurn("scammer", scammerText);
       conversationHistory.push({ role: "scammer", content: scammerText, timestamp: new Date().toISOString() });
 
-      // Speak scammer line and wait for it to finish
-      await speak(scammerText, "scammer");
+      // Send context to OmniDim iframe
+      sendToOmniDim(iframeRef.current, scammerText);
+
+      // Play scammer voice aloud
+      await playScammer(scammerText);
       if (isCancelled.current) return;
 
-      // Small gap between scammer finishing and agent thinking
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 500));
       if (isCancelled.current) return;
 
-      // ── AI Agent responds ────────────────────────────────────
+      // ── AI Agent (OmniDimension) responds ─────────────────────────────────
       setIsProcessing(true);
-      let agentReply = "Arre, ek minute. Can you repeat that? My phone signal is not good.";
+      let agentReply = "Arre bhai, ek second. Mujhe kuch samajh nahi aaya — dobara boliye?";
 
       try {
         const resp = await fetch("/api/honeypot/analyze", {
@@ -186,26 +251,30 @@ export function CallShield() {
       addTurn("agent", agentReply);
       conversationHistory.push({ role: "agent", content: agentReply, timestamp: new Date().toISOString() });
 
-      // Speak agent reply and wait for it to finish
-      await speak(agentReply, "agent");
+      // Tell OmniDim iframe to speak this response
+      sendToOmniDim(iframeRef.current, scammerText, agentReply);
+
+      // Show "agent speaking" state while OmniDim speaks (~650ms per word)
+      const words = agentReply.trim().split(/\s+/).length;
+      const estimatedMs = Math.max(2500, words * 650);
+      await markAgentSpeaking(estimatedMs);
       if (isCancelled.current) return;
 
-      // Gap between agent finishing and scammer's next line
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 700));
     }
 
     if (isCancelled.current) return;
     stopSpeech();
     setSpeakingRole(null);
     setCallState("ended");
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 600));
     setVerdict({
       scam: true,
       confidence: 97,
       tactics: [
-        "Impersonation — posed as SBI fraud team",
+        "Impersonation — posed as SBI fraud team officer",
         "Card number extraction attempt",
-        "OTP phishing under time pressure",
+        "OTP phishing under fake 60-second countdown",
       ],
     });
     setCallState("verdict");
@@ -232,57 +301,47 @@ export function CallShield() {
     URL.revokeObjectURL(url);
   };
 
+  const isCallActive = callState === "active" || callState === "ended";
+
   return (
     <Shell>
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-semibold">Call Shield</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Real-time voice interception — listen to scammer vs AI
+              Real-time voice interception — OmniDimension AI talks to scammer
             </p>
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Audio toggle */}
             <button
-              onClick={() => {
-                if (audioEnabled) stopSpeech();
-                setAudioEnabled((v) => !v);
-              }}
+              onClick={() => { if (audioEnabled) stopSpeech(); setAudioEnabled((v) => !v); }}
               className={cn(
                 "flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-full transition-colors",
                 audioEnabled
                   ? "bg-primary/10 text-primary border-primary/30"
                   : "bg-muted text-muted-foreground border-border"
               )}
-              title="Toggle audio narration"
             >
               {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               Audio {audioEnabled ? "On" : "Off"}
             </button>
 
-            {/* Shield toggle */}
             <div className="flex items-center gap-2.5">
               <span className="text-sm text-muted-foreground">Active Protection</span>
               <button
-                onClick={() => {
-                  const next = !isEnabled;
-                  setIsEnabled(next);
-                  if (!next) endCall();
-                }}
+                onClick={() => { const next = !isEnabled; setIsEnabled(next); if (!next) endCall(); }}
                 className={cn(
                   "relative w-12 h-6 rounded-full transition-colors duration-300 focus:outline-none",
                   isEnabled ? "bg-primary" : "bg-muted"
                 )}
               >
-                <div
-                  className={cn(
-                    "absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-300",
-                    isEnabled ? "translate-x-6" : "translate-x-0.5"
-                  )}
-                />
+                <div className={cn(
+                  "absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-300",
+                  isEnabled ? "translate-x-6" : "translate-x-0.5"
+                )} />
               </button>
               <span className={cn("text-xs font-medium", isEnabled ? "text-primary" : "text-muted-foreground")}>
                 {isEnabled ? "Online" : "Offline"}
@@ -292,365 +351,298 @@ export function CallShield() {
         </div>
 
         {!isEnabled ? (
-          <div className="bg-card border border-dashed border-border rounded-xl flex flex-col items-center justify-center py-20 text-center">
+          <div className="bg-card border border-dashed border-border rounded-xl flex flex-col items-center justify-center py-24 text-center">
             <Shield className="w-12 h-12 text-muted-foreground/30 mb-3" />
             <p className="text-muted-foreground text-sm">Enable Active Protection to intercept calls</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Phone Panel */}
-            <div className="bg-card border border-border rounded-xl flex flex-col items-center justify-center min-h-[400px] p-6 text-center">
-              {callState === "idle" && (
-                <div className="space-y-4">
-                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                    <PhoneCall className="w-8 h-8 text-primary/50" />
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground text-sm mb-1">Shield is listening for incoming calls</p>
-                    {audioEnabled && (
-                      <p className="text-xs text-primary/70">
-                        Both voices will be spoken aloud — scammer & AI agent
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    onClick={startSimulation}
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
-                  >
-                    Simulate Incoming Scam Call
-                  </button>
-                </div>
-              )}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
-              {callState === "ringing" && (
-                <div className="space-y-4">
-                  <div className="relative w-20 h-20 mx-auto">
-                    <div className="absolute inset-0 rounded-full bg-orange-500/20 animate-ping" />
-                    <div
-                      className="absolute inset-2 rounded-full bg-orange-500/20 animate-ping"
-                      style={{ animationDelay: "0.3s" }}
-                    />
-                    <div className="relative w-20 h-20 rounded-full bg-orange-500/10 border border-orange-500/30 flex items-center justify-center">
-                      <PhoneCall className="w-8 h-8 text-orange-400" />
+            {/* ── Left: Scammer + Controls ─────────────────────────────────── */}
+            <div className="lg:col-span-2 flex flex-col gap-4">
+
+              {/* Call status card */}
+              <div className="bg-card border border-border rounded-xl p-5">
+                {callState === "idle" && (
+                  <div className="flex flex-col items-center text-center gap-4 py-6">
+                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                      <PhoneCall className="w-8 h-8 text-primary/50" />
                     </div>
+                    <p className="text-sm text-muted-foreground">
+                      Shield is listening. OmniDimension AI voice is ready as the agent.
+                    </p>
+                    <button
+                      onClick={startSimulation}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium px-6 py-2.5 rounded-lg transition-colors"
+                    >
+                      Simulate Incoming Scam Call
+                    </button>
                   </div>
-                  <div>
-                    <p className="font-semibold text-orange-400">Incoming Call</p>
-                    <p className="text-sm text-muted-foreground font-mono mt-1">+91 98765 43210</p>
-                    <p className="text-xs text-muted-foreground mt-1">Unknown / Suspicious</p>
-                  </div>
-                  <p className="text-xs text-primary animate-pulse">AI Agent intercepting...</p>
-                </div>
-              )}
+                )}
 
-              {(callState === "active" || callState === "ended") && (
-                <div className="w-full space-y-5">
-                  {/* Live audio indicator */}
-                  <div className="flex items-end justify-center gap-6">
-                    {/* Scammer side */}
-                    <div className="flex flex-col items-center gap-2">
-                      <div
-                        className={cn(
-                          "w-12 h-12 rounded-full border flex items-center justify-center transition-colors",
+                {callState === "ringing" && (
+                  <div className="flex flex-col items-center text-center gap-4 py-4">
+                    <div className="relative w-20 h-20">
+                      <div className="absolute inset-0 rounded-full bg-orange-500/20 animate-ping" />
+                      <div className="absolute inset-2 rounded-full bg-orange-500/20 animate-ping" style={{ animationDelay: "0.3s" }} />
+                      <div className="relative w-20 h-20 rounded-full bg-orange-500/10 border border-orange-500/30 flex items-center justify-center">
+                        <PhoneCall className="w-8 h-8 text-orange-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-orange-400">Incoming Call</p>
+                      <p className="text-sm text-muted-foreground font-mono mt-1">+91 98765 43210</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Unknown / Suspicious</p>
+                    </div>
+                    <p className="text-xs text-primary animate-pulse">OmniDimension AI intercepting...</p>
+                  </div>
+                )}
+
+                {isCallActive && (
+                  <div className="space-y-4">
+                    {/* Audio bars */}
+                    <div className="flex items-end justify-center gap-10">
+                      {/* Scammer */}
+                      <div className="flex flex-col items-center gap-2">
+                        <div className={cn(
+                          "w-11 h-11 rounded-full border flex items-center justify-center transition-colors",
                           speakingRole === "scammer"
                             ? "bg-orange-500/20 border-orange-500/50"
                             : "bg-muted/50 border-border"
-                        )}
-                      >
-                        <Mic
-                          className={cn(
-                            "w-5 h-5 transition-colors",
+                        )}>
+                          <Mic className={cn("w-5 h-5 transition-colors",
                             speakingRole === "scammer" ? "text-orange-400" : "text-muted-foreground"
-                          )}
-                        />
+                          )} />
+                        </div>
+                        <span className="text-xs text-muted-foreground">Scammer</span>
+                        <div className="flex gap-0.5 items-end h-5">
+                          {[3, 6, 9, 5, 8].map((h, i) => (
+                            <div key={i} className={cn("w-1 rounded-full transition-all",
+                              speakingRole === "scammer" ? "bg-orange-400 animate-pulse" : "bg-border"
+                            )} style={{ height: speakingRole === "scammer" ? `${h * 2}px` : "3px", animationDelay: `${i * 0.12}s` }} />
+                          ))}
+                        </div>
                       </div>
-                      <span className="text-xs text-muted-foreground">Scammer</span>
-                      {/* Waveform */}
-                      <div className="flex gap-0.5 items-end h-6">
-                        {[3, 6, 9, 5, 8].map((h, i) => (
-                          <div
-                            key={i}
-                            className={cn(
-                              "w-1 rounded-full transition-all",
-                              speakingRole === "scammer"
-                                ? "bg-orange-400 animate-pulse"
-                                : "bg-border"
-                            )}
-                            style={{
-                              height: speakingRole === "scammer" ? `${h * 3}px` : "4px",
-                              animationDelay: `${i * 0.12}s`,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </div>
 
-                    <div className="text-xs text-muted-foreground pb-4">vs</div>
+                      <div className="text-xs text-muted-foreground pb-5">vs</div>
 
-                    {/* Agent side */}
-                    <div className="flex flex-col items-center gap-2">
-                      <div
-                        className={cn(
-                          "w-12 h-12 rounded-full border flex items-center justify-center transition-colors",
+                      {/* Agent */}
+                      <div className="flex flex-col items-center gap-2">
+                        <div className={cn(
+                          "w-11 h-11 rounded-full border flex items-center justify-center transition-colors",
                           speakingRole === "agent"
                             ? "bg-primary/20 border-primary/50"
                             : isProcessing
                             ? "bg-primary/10 border-primary/30 animate-pulse"
                             : "bg-muted/50 border-border"
-                        )}
-                      >
-                        <Volume2
-                          className={cn(
-                            "w-5 h-5 transition-colors",
-                            speakingRole === "agent"
-                              ? "text-primary"
-                              : isProcessing
-                              ? "text-primary/60"
-                              : "text-muted-foreground"
-                          )}
-                        />
-                      </div>
-                      <span className="text-xs text-muted-foreground">AI Agent</span>
-                      {/* Waveform */}
-                      <div className="flex gap-0.5 items-end h-6">
-                        {[4, 7, 5, 9, 6].map((h, i) => (
-                          <div
-                            key={i}
-                            className={cn(
-                              "w-1 rounded-full transition-all",
-                              speakingRole === "agent"
-                                ? "bg-primary animate-pulse"
-                                : "bg-border"
-                            )}
-                            style={{
-                              height: speakingRole === "agent" ? `${h * 3}px` : "4px",
-                              animationDelay: `${i * 0.1}s`,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Status text */}
-                  <div className="text-center min-h-[24px]">
-                    {speakingRole === "scammer" && (
-                      <p className="text-xs text-orange-400 animate-pulse">Scammer speaking...</p>
-                    )}
-                    {speakingRole === "agent" && (
-                      <p className="text-xs text-primary animate-pulse">AI Agent speaking...</p>
-                    )}
-                    {isProcessing && !speakingRole && (
-                      <div className="flex items-center justify-center gap-1.5">
-                        <span className="text-xs text-muted-foreground">Agent thinking</span>
-                        <div className="flex gap-0.5">
-                          {[0, 1, 2].map((i) => (
-                            <div
-                              key={i}
-                              className="w-1 h-1 bg-primary rounded-full animate-bounce"
-                              style={{ animationDelay: `${i * 0.15}s` }}
-                            />
+                        )}>
+                          <Bot className={cn("w-5 h-5 transition-colors",
+                            speakingRole === "agent" ? "text-primary"
+                            : isProcessing ? "text-primary/60"
+                            : "text-muted-foreground"
+                          )} />
+                        </div>
+                        <span className="text-xs text-primary/80 font-medium">OmniDimension AI</span>
+                        <div className="flex gap-0.5 items-end h-5">
+                          {[4, 7, 5, 9, 6].map((h, i) => (
+                            <div key={i} className={cn("w-1 rounded-full transition-all",
+                              speakingRole === "agent" ? "bg-primary animate-pulse" : "bg-border"
+                            )} style={{ height: speakingRole === "agent" ? `${h * 2}px` : "3px", animationDelay: `${i * 0.1}s` }} />
                           ))}
                         </div>
                       </div>
-                    )}
-                  </div>
+                    </div>
 
-                  <button
-                    onClick={endCall}
-                    className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-sm px-4 py-2 rounded-lg transition-colors mx-auto"
-                  >
-                    <PhoneOff className="w-4 h-4" /> End Call
-                  </button>
-                </div>
-              )}
-
-              {callState === "verdict" && verdict && (
-                <div className="space-y-4 w-full">
-                  {verdict.scam ? (
-                    <>
-                      <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto">
-                        <AlertTriangle className="w-8 h-8 text-red-400" />
-                      </div>
-                      <div>
-                        <p className="text-lg font-bold text-red-400">Scam Call Confirmed</p>
-                        <p className="text-sm text-muted-foreground mt-1">{verdict.confidence}% confidence</p>
-                      </div>
-                      <div className="text-left w-full space-y-1.5">
-                        {verdict.tactics.map((t, i) => (
-                          <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <div className="w-1 h-1 rounded-full bg-red-400 flex-shrink-0" />
-                            {t}
+                    {/* Status line */}
+                    <div className="text-center min-h-[20px]">
+                      {speakingRole === "scammer" && (
+                        <p className="text-xs text-orange-400 animate-pulse">Scammer speaking...</p>
+                      )}
+                      {speakingRole === "agent" && (
+                        <p className="text-xs text-primary animate-pulse">OmniDimension AI speaking...</p>
+                      )}
+                      {isProcessing && !speakingRole && (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className="text-xs text-muted-foreground">Agent thinking</span>
+                          <div className="flex gap-0.5">
+                            {[0, 1, 2].map((i) => (
+                              <div key={i} className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                      <div className="flex gap-2 w-full">
-                        <button
-                          onClick={() => setShowFIR(true)}
-                          className="flex-1 flex items-center justify-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium px-3 py-2 rounded-lg transition-colors"
-                        >
-                          <FileText className="w-3.5 h-3.5" /> Generate FIR
-                        </button>
-                        <button
-                          onClick={endCall}
-                          className="flex-1 flex items-center justify-center gap-1.5 bg-background hover:bg-card text-muted-foreground border border-border text-xs px-3 py-2 rounded-lg transition-colors"
-                        >
-                          New Simulation
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto" />
-                      <p className="font-semibold text-emerald-400">Legitimate Call</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-center">
                       <button
                         onClick={endCall}
-                        className="bg-primary text-primary-foreground text-sm px-4 py-2 rounded-lg"
+                        className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-sm px-4 py-2 rounded-lg transition-colors"
                       >
-                        Done
+                        <PhoneOff className="w-4 h-4" /> End Call
                       </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Transcript */}
-            <div className="bg-card border border-border rounded-xl flex flex-col">
-              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                <h3 className="font-medium text-sm">Live Transcript</h3>
-                {audioEnabled && callState === "active" && (
-                  <span className="text-xs text-primary/70 flex items-center gap-1">
-                    <Volume2 className="w-3 h-3" /> Audio playing
-                  </span>
-                )}
-              </div>
-              <div
-                ref={transcriptRef}
-                className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[320px]"
-              >
-                {turns.length === 0 ? (
-                  <p className="text-muted-foreground text-sm text-center py-10">
-                    {callState === "idle"
-                      ? "Start a simulation to see live transcript"
-                      : "Waiting for call to connect..."}
-                  </p>
-                ) : (
-                  turns.map((turn, i) => (
-                    <div
-                      key={i}
-                      className={cn("flex", turn.role === "agent" ? "justify-end" : "justify-start")}
-                    >
-                      <div
-                        className={cn(
-                          "max-w-[85%] rounded-lg p-3 text-sm border transition-all",
-                          turn.role === "agent"
-                            ? "bg-primary/10 border-primary/20 text-foreground"
-                            : "bg-background border-border text-foreground",
-                          // Highlight the currently speaking turn
-                          speakingRole === turn.role &&
-                            i === turns.filter((t) => t.role === turn.role).length - 1 + turns.findIndex((t) => t === turn) - turns.filter((t) => t.role === turn.role).length + 1
-                            ? "ring-1 ring-offset-0"
-                            : ""
-                        )}
-                      >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span
-                            className={cn(
-                              "text-xs font-medium flex items-center gap-1",
-                              turn.role === "agent" ? "text-primary" : "text-orange-400"
-                            )}
-                          >
-                            {turn.role === "agent" ? (
-                              <Volume2 className="w-3 h-3" />
-                            ) : (
-                              <Mic className="w-3 h-3" />
-                            )}
-                            {turn.role === "agent" ? "AI Agent (Ramesh)" : "Suspect (Scammer)"}
-                          </span>
-                          <span className="text-xs text-muted-foreground ml-auto">
-                            {format(turn.timestamp, "HH:mm:ss")}
-                          </span>
-                        </div>
-                        <p className="leading-relaxed">{turn.text}</p>
-                      </div>
-                    </div>
-                  ))
-                )}
-                {isProcessing && (
-                  <div className="flex justify-end">
-                    <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2.5 flex items-center gap-2">
-                      <span className="text-xs text-primary">Agent generating response</span>
-                      <div className="flex gap-0.5">
-                        {[0, 1, 2].map((i) => (
-                          <div
-                            key={i}
-                            className="w-1 h-1 bg-primary rounded-full animate-bounce"
-                            style={{ animationDelay: `${i * 0.15}s` }}
-                          />
-                        ))}
-                      </div>
                     </div>
                   </div>
                 )}
+
+                {callState === "verdict" && verdict && (
+                  <div className="flex flex-col items-center text-center gap-4 py-2">
+                    <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
+                      <AlertTriangle className="w-7 h-7 text-red-400" />
+                    </div>
+                    <div>
+                      <p className="text-lg font-bold text-red-400">Scam Call Confirmed</p>
+                      <p className="text-sm text-muted-foreground mt-0.5">{verdict.confidence}% confidence</p>
+                    </div>
+                    <div className="text-left w-full space-y-1.5">
+                      {verdict.tactics.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <div className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" />
+                          {t}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 w-full pt-1">
+                      <button
+                        onClick={() => setShowFIR(true)}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+                      >
+                        <FileText className="w-3.5 h-3.5" /> Generate FIR
+                      </button>
+                      <button
+                        onClick={endCall}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-background hover:bg-card text-muted-foreground border border-border text-xs px-3 py-2 rounded-lg transition-colors"
+                      >
+                        New Simulation
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Transcript */}
+              <div className="bg-card border border-border rounded-xl flex flex-col flex-1 min-h-[220px]">
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                  <h3 className="font-medium text-sm">Live Transcript</h3>
+                  {callState === "verdict" && (
+                    <button onClick={downloadFIR} className="flex items-center gap-1 text-xs text-primary hover:underline">
+                      <FileText className="w-3 h-3" /> Download FIR
+                    </button>
+                  )}
+                </div>
+                <div ref={transcriptRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {turns.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-8">
+                      {callState === "idle" ? "Transcript will appear here during the call." : "Waiting for first speaker..."}
+                    </p>
+                  ) : (
+                    turns.map((turn, i) => (
+                      <div key={i} className={cn("flex gap-2.5", turn.role === "agent" && "flex-row-reverse")}>
+                        <div className={cn(
+                          "w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs",
+                          turn.role === "scammer"
+                            ? "bg-orange-500/15 text-orange-400"
+                            : "bg-primary/15 text-primary"
+                        )}>
+                          {turn.role === "scammer" ? <Mic className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
+                        </div>
+                        <div className={cn("max-w-[80%] space-y-0.5", turn.role === "agent" && "items-end")}>
+                          <p className={cn("text-[10px] font-medium",
+                            turn.role === "scammer" ? "text-orange-400" : "text-primary"
+                          )}>
+                            {turn.role === "scammer" ? "Scammer" : "OmniDimension AI (Ramesh Kumar)"}
+                            <span className="text-muted-foreground font-normal ml-1.5">
+                              {format(turn.timestamp, "HH:mm:ss")}
+                            </span>
+                          </p>
+                          <div className={cn(
+                            "text-xs px-3 py-2 rounded-lg leading-relaxed",
+                            turn.role === "scammer"
+                              ? "bg-orange-500/10 text-foreground"
+                              : "bg-primary/10 text-foreground"
+                          )}>
+                            {turn.text}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Right: OmniDimension Voice Widget ────────────────────────── */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 px-1">
+                <Bot className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium">OmniDimension AI Agent</span>
+                <div className={cn(
+                  "ml-auto w-2 h-2 rounded-full",
+                  iframeLoaded ? "bg-emerald-400" : "bg-muted-foreground/40"
+                )} />
+                <span className="text-xs text-muted-foreground">{iframeLoaded ? "Ready" : "Loading..."}</span>
+              </div>
+
+              <div className="relative bg-card border border-border rounded-xl overflow-hidden"
+                style={{ height: "560px" }}>
+                {!iframeLoaded && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 z-10 bg-card">
+                    <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    <span className="text-xs text-muted-foreground">Loading OmniDimension...</span>
+                  </div>
+                )}
+                <iframe
+                  ref={iframeRef}
+                  src={OMNIDIM_IFRAME_URL}
+                  title="OmniDimension AI Voice Agent"
+                  allow="microphone; camera; autoplay; clipboard-write"
+                  className="w-full h-full border-0"
+                  onLoad={() => {
+                    setIframeLoaded(true);
+                    // Try to auto-start if a call is already active
+                    if (callState === "active") {
+                      setTimeout(() => startOmniDimSession(iframeRef.current), 500);
+                    }
+                  }}
+                />
+              </div>
+
+              <p className="text-[10px] text-muted-foreground text-center px-1 leading-relaxed">
+                OmniDimension's real AI voice is active in this panel.
+                During the simulation, agent responses are sent here for natural voice output.
+                You can also speak directly into it — the AI will respond.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* FIR Modal */}
+        {showFIR && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-card border border-border rounded-xl w-full max-w-xl max-h-[80vh] flex flex-col">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h2 className="font-semibold">FIR Report — Voice Fraud</h2>
+                <button onClick={() => setShowFIR(false)} className="text-muted-foreground hover:text-foreground text-sm">✕</button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5">
+                <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                  {generateFIRFromCall(turns)}
+                </pre>
+              </div>
+              <div className="flex gap-2 p-4 border-t border-border">
+                <button
+                  onClick={downloadFIR}
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 rounded-lg transition-colors"
+                >
+                  <FileText className="w-4 h-4" /> Download .txt
+                </button>
+                <button onClick={() => setShowFIR(false)} className="px-4 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">
+                  Close
+                </button>
               </div>
             </div>
           </div>
         )}
       </div>
-
-      {/* FIR Modal */}
-      {showFIR && (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setShowFIR(false)}
-        >
-          <div
-            className="bg-card border border-border rounded-xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-5 border-b border-border">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-primary" />
-                <h2 className="font-semibold">FIR Report — Phone Fraud</h2>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={downloadFIR}
-                  className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" /> Download
-                </button>
-                <button
-                  onClick={() => setShowFIR(false)}
-                  className="text-muted-foreground hover:text-foreground text-sm px-2"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1 p-5">
-              <pre className="text-xs font-mono text-foreground leading-relaxed whitespace-pre-wrap bg-background border border-border rounded-lg p-4">
-                {generateFIRFromCall(turns)}
-              </pre>
-            </div>
-            <div className="p-4 border-t border-border">
-              <p className="text-xs text-muted-foreground">
-                File at{" "}
-                <a
-                  href="https://cybercrime.gov.in"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary underline"
-                >
-                  cybercrime.gov.in
-                </a>{" "}
-                or call <strong>1930</strong>
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </Shell>
   );
 }
