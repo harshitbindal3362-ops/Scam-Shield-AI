@@ -1,9 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Oxanium:wght@400;500;600;700;800&family=Saira:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme inline {
-  --font-display: 'Oxanium', system-ui, sans-serif;
-  --font-sans: 'Saira', system-ui, sans-serif;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -25,123 +26,87 @@
 }
 
 :root {
-  /* LIGHT MODE (Tech / Corporate look) */
-  --background: 210 20% 98%;
-  --foreground: 222 47% 11%;
-  
-  --primary: 200 100% 40%;
+  --background: 0 0% 98%;
+  --foreground: 224 71% 4%;
+
+  --primary: 221 83% 53%;
   --primary-foreground: 0 0% 100%;
-  
-  --secondary: 210 20% 90%;
-  --secondary-foreground: 222 47% 11%;
-  
-  --accent: 280 80% 50%;
-  --accent-foreground: 0 0% 100%;
-  
-  --destructive: 350 80% 50%;
+
+  --secondary: 220 14% 96%;
+  --secondary-foreground: 224 71% 4%;
+
+  --accent: 220 14% 96%;
+  --accent-foreground: 224 71% 4%;
+
+  --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
 
-  --success: 140 70% 40%;
-  --warning: 40 90% 50%;
-  
-  --muted: 210 20% 90%;
-  --muted-foreground: 215 16% 40%;
-  
-  --border: 214 30% 85%;
+  --success: 142 71% 45%;
+  --warning: 38 92% 50%;
+
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 9% 46%;
+
+  --border: 220 13% 91%;
   --card: 0 0% 100%;
-  --card-border: 214 30% 85%;
+  --card-border: 220 13% 91%;
 }
 
 .dark {
-  /* DARK MODE (Cyberpunk / Terminal look) */
-  --background: 230 40% 4%;
-  --foreground: 190 80% 90%;
-  
-  --primary: 190 100% 50%; /* Neon Cyan */
-  --primary-foreground: 230 50% 5%;
-  
-  --secondary: 230 40% 10%;
-  --secondary-foreground: 190 80% 90%;
-  
-  --accent: 280 100% 60%; /* Neon Purple */
-  --accent-foreground: 230 50% 5%;
-  
-  --destructive: 350 100% 60%; /* Neon Red */
+  --background: 224 71% 4%;
+  --foreground: 213 31% 91%;
+
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 222 47% 11%;
+  --secondary-foreground: 213 31% 91%;
+
+  --accent: 222 47% 11%;
+  --accent-foreground: 213 31% 91%;
+
+  --destructive: 0 63% 58%;
   --destructive-foreground: 0 0% 100%;
 
-  --success: 140 100% 50%; /* Neon Green */
-  --warning: 40 100% 50%; /* Neon Yellow */
-  
-  --muted: 230 30% 15%;
-  --muted-foreground: 190 30% 60%;
-  
-  --border: 190 100% 50% / 0.2;
-  --card: 230 40% 6%;
-  --card-border: 190 100% 50% / 0.15;
+  --success: 142 71% 45%;
+  --warning: 38 92% 50%;
+
+  --muted: 223 47% 11%;
+  --muted-foreground: 215 20% 55%;
+
+  --border: 216 34% 17%;
+  --card: 224 71% 6%;
+  --card-border: 216 34% 17%;
 }
 
 @layer base {
+  * {
+    box-sizing: border-box;
+  }
+
   body {
-    @apply bg-background text-foreground antialiased selection:bg-primary selection:text-primary-foreground;
-    background-image: 
-      radial-gradient(circle at 50% 0%, hsl(var(--primary) / 0.05) 0%, transparent 50%),
-      linear-gradient(to bottom, transparent, hsl(var(--background))),
-      linear-gradient(to right, hsl(var(--primary) / 0.02) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--primary) / 0.02) 1px, transparent 1px);
-    background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
-    background-attachment: fixed;
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-display tracking-tight uppercase;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-weight: 600;
   }
-}
-
-/* Custom Scanline Animation */
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100vh); }
-}
-
-.scanline {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 4px;
-  background: hsl(var(--primary) / 0.3);
-  box-shadow: 0 0 10px hsl(var(--primary)), 0 0 20px hsl(var(--primary));
-  animation: scanline 8s linear infinite;
-  pointer-events: none;
-  z-index: 50;
-  opacity: 0.5;
-}
-
-/* Cyber Glow Utilities */
-.cyber-glow {
-  box-shadow: 0 0 15px hsl(var(--primary) / 0.3);
-}
-
-.cyber-glow-red {
-  box-shadow: 0 0 15px hsl(var(--destructive) / 0.3);
-}
-
-.cyber-glow-text {
-  text-shadow: 0 0 8px hsl(var(--primary) / 0.5);
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: hsl(var(--background));
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: hsl(var(--border));
-  border-radius: 3px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--primary));
+  background: hsl(var(--muted-foreground));
 }

@@ -267,38 +267,10 @@ router.post("/sessions/:sessionId/finalize", async (req, res) => {
       agentNotes = `Scammer used ${session.scamType || "unknown"} tactics. Engagement lasted ${engagementDuration} seconds with ${totalMessages} messages exchanged. Intelligence extracted: ${intel.upiIds.length} UPI IDs, ${intel.bankAccounts.length} bank accounts, ${intel.phishingLinks.length} phishing links, ${intel.phoneNumbers.length} phone numbers.`;
     }
 
-    const guviPayload = {
-      sessionId,
-      scamDetected: session.scamDetected,
-      totalMessagesExchanged: totalMessages,
-      extractedIntelligence: intel,
-      agentNotes,
-      engagementMetrics: {
-        engagementDurationSeconds: engagementDuration,
-        totalMessagesExchanged: totalMessages,
-      },
-    };
-
-    let guviCallbackStatus = "pending";
-
-    try {
-      const guviResponse = await fetch(GUVI_CALLBACK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(guviPayload),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      guviCallbackStatus = guviResponse.ok ? "success" : `failed:${guviResponse.status}`;
-    } catch (callbackErr) {
-      console.error("GUVI callback failed:", callbackErr);
-      guviCallbackStatus = "failed:network_error";
-    }
-
     await db.update(honeypotSessions).set({
       status: "complete",
       agentNotes,
-      guviCallbackStatus,
+      guviCallbackStatus: "not_sent",
       engagementDurationSeconds: engagementDuration,
       finalizedAt: new Date(),
     }).where(eq(honeypotSessions.sessionId, sessionId));
@@ -313,7 +285,7 @@ router.post("/sessions/:sessionId/finalize", async (req, res) => {
       },
       extractedIntelligence: intel,
       agentNotes,
-      guviCallbackStatus,
+      guviCallbackStatus: "not_sent",
     });
   } catch (err) {
     console.error("Error in POST /sessions/:id/finalize:", err);
