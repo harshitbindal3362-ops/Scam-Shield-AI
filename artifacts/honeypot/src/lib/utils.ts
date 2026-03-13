@@ -8,13 +8,10 @@ export function cn(...inputs: ClassValue[]) {
 // OmniDimension integration
 declare global {
   interface Window {
-    OmniDim?: {
-      speak: (text: string) => void;
-    };
+    OmniDim?: { speak: (text: string) => void };
   }
 }
 
-// Play a single message via OmniDim (agent voice for session detail)
 export function playVoice(text: string) {
   if (window.OmniDim && typeof window.OmniDim.speak === "function") {
     window.OmniDim.speak(text);
@@ -23,110 +20,100 @@ export function playVoice(text: string) {
   }
 }
 
-// ─── Browser Speech Synthesis ────────────────────────────────────────────────
+// ─── Voice selection ─────────────────────────────────────────────────────────
 
-/** Speak text using the browser's built-in TTS.
- *  role: "agent"   → slower, calm, slightly confused (Ramesh Kumar)
- *  role: "scammer" → faster, slightly higher pitch, urgent
- *  Returns a Promise that resolves when speech finishes (or after timeout).
- */
+/** Pick the best available voice for a role.
+ *  Preference order: Google Neural > Google > named high-quality > any. */
+function pickVoice(
+  voices: SpeechSynthesisVoice[],
+  role: "scammer" | "agent"
+): SpeechSynthesisVoice | null {
+  if (!voices.length) return null;
+
+  if (role === "scammer") {
+    // Want: confident, clear male — Google US English Male is best
+    return (
+      voices.find((v) => v.name === "Google UK English Male") ||
+      voices.find((v) => v.name === "Google US English") ||
+      voices.find((v) => /google/i.test(v.name) && /en/i.test(v.lang)) ||
+      voices.find((v) => /microsoft.*david|microsoft.*mark|microsoft.*guy/i.test(v.name)) ||
+      voices.find((v) => /^(Alex|Daniel|Fred|Thomas)$/i.test(v.name)) ||
+      voices.find((v) => /en-US|en-GB/i.test(v.lang) && !/(Zira|Hazel|Susan)/i.test(v.name)) ||
+      voices[0]
+    );
+  } else {
+    // Want: warm, slightly different timbre from scammer
+    return (
+      voices.find((v) => v.name === "Google UK English Female") ||
+      voices.find((v) => v.name === "Google हिन्दी") ||
+      voices.find((v) => /google/i.test(v.name) && /en-IN|hi/i.test(v.lang)) ||
+      voices.find((v) => /rishi|veena|lekha/i.test(v.name)) ||
+      voices.find((v) => /microsoft.*zira|microsoft.*hazel/i.test(v.name)) ||
+      voices.find((v) => /^(Samantha|Karen|Victoria|Moira|Fiona|Tessa)$/i.test(v.name)) ||
+      voices.find((v) => /en-IN/i.test(v.lang)) ||
+      voices[Math.min(1, voices.length - 1)]
+    );
+  }
+}
+
+// ─── Core speak function ─────────────────────────────────────────────────────
+
+/** Speak text and return a Promise that resolves when done.
+ *  role changes voice character and delivery style. */
 export function speakBrowser(
   text: string,
-  role: "agent" | "scammer",
-  onEnd?: () => void
+  role: "agent" | "scammer"
 ): Promise<void> {
   return new Promise((resolve) => {
-    if (!("speechSynthesis" in window)) {
-      onEnd?.();
-      resolve();
-      return;
-    }
+    if (!("speechSynthesis" in window)) { resolve(); return; }
 
-    // Cancel anything currently speaking
     window.speechSynthesis.cancel();
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utter = new SpeechSynthesisUtterance(text);
 
+    // Natural delivery settings — keep close to 1.0 for human feel
     if (role === "scammer") {
-      utterance.rate = 1.15;      // slightly fast — creates urgency
-      utterance.pitch = 1.1;      // slightly higher
-      utterance.volume = 1;
+      utter.rate  = 1.05;   // confident, controlled, slightly brisk
+      utter.pitch = 1.0;    // neutral — don't sound like a cartoon
+      utter.volume = 1.0;
     } else {
-      utterance.rate = 0.88;      // slower — confused, elderly
-      utterance.pitch = 0.9;      // slightly lower, warmer
-      utterance.volume = 1;
+      utter.rate  = 0.93;   // slightly slower, hesitant
+      utter.pitch = 0.95;   // slightly warmer / lower
+      utter.volume = 1.0;
     }
 
-    // Try to assign distinct voices when available
-    const assignVoice = () => {
+    const applyVoice = () => {
       const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        if (role === "scammer") {
-          // Prefer a male US/UK voice for the scammer
-          const male =
-            voices.find((v) =>
-              /male|david|mark|alex|daniel|james/i.test(v.name)
-            ) ||
-            voices.find((v) => /en-US|en-GB/i.test(v.lang)) ||
-            voices[0];
-          utterance.voice = male;
-        } else {
-          // Prefer a different voice for agent (female or different accent)
-          const female =
-            voices.find((v) =>
-              /female|samantha|karen|victoria|moira|fiona|rishi|veena/i.test(
-                v.name
-              )
-            ) ||
-            voices.find(
-              (v) => /en-IN|hi-IN/i.test(v.lang)
-            ) ||
-            voices[Math.min(1, voices.length - 1)];
-          utterance.voice = female;
-        }
-      }
+      const v = pickVoice(voices, role);
+      if (v) utter.voice = v;
     };
 
-    // Voices may not be loaded yet on first call
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      assignVoice();
+    const loaded = window.speechSynthesis.getVoices();
+    if (loaded.length) {
+      applyVoice();
+      doSpeak();
     } else {
-      window.speechSynthesis.onvoiceschanged = () => {
-        assignVoice();
-        window.speechSynthesis.onvoiceschanged = null;
-      };
+      // Chrome loads voices async on first call
+      window.speechSynthesis.addEventListener("voiceschanged", function handler() {
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+        applyVoice();
+        doSpeak();
+      });
     }
 
-    utterance.onend = () => {
-      onEnd?.();
-      resolve();
-    };
-    utterance.onerror = () => {
-      onEnd?.();
-      resolve();
-    };
+    function doSpeak() {
+      const timeout = setTimeout(() => {
+        window.speechSynthesis.cancel();
+        resolve();
+      }, 20000);
 
-    // Fallback timeout: max 15 seconds per utterance
-    const timeout = setTimeout(() => {
-      window.speechSynthesis.cancel();
-      onEnd?.();
-      resolve();
-    }, 15000);
-
-    utterance.onend = () => {
-      clearTimeout(timeout);
-      onEnd?.();
-      resolve();
-    };
-
-    window.speechSynthesis.speak(utterance);
+      utter.onend  = () => { clearTimeout(timeout); resolve(); };
+      utter.onerror = () => { clearTimeout(timeout); resolve(); };
+      window.speechSynthesis.speak(utter);
+    }
   });
 }
 
-/** Stop any ongoing speech */
 export function stopSpeech() {
-  if ("speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
-  }
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 }

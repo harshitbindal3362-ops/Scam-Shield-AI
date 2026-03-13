@@ -8,26 +8,19 @@ import { cn, speakBrowser, stopSpeech } from "@/lib/utils";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
+// 3 short exchanges — punchy, realistic, fast
 const SCAMMER_SCRIPT = [
   {
-    text: "Hello, am I speaking with the account holder? This is Vikram Sharma calling from SBI Fraud Prevention Team.",
-    delay: 1200,
+    text: "Hello, Pradeep here from SBI fraud team. Your account shows a suspicious transaction of 48,000 rupees. I need to verify you right now.",
+    delay: 900,
   },
   {
-    text: "Sir, we have detected multiple suspicious transactions on your account in the last 30 minutes. Your account will be blocked in the next 2 hours if you do not verify your identity immediately.",
-    delay: 2800,
+    text: "To reverse this transaction, I need your 16-digit card number. Just read it out — this call is recorded for your protection.",
+    delay: 2200,
   },
   {
-    text: "I need you to confirm your 16-digit debit card number so I can flag it as legitimate and prevent the block.",
-    delay: 2400,
-  },
-  {
-    text: "Also sir, an OTP has been sent to your registered mobile. Please share it with me so I can verify you are the account owner.",
-    delay: 2600,
-  },
-  {
-    text: "Sir, please hurry. You have less than 5 minutes before the system automatically suspends your account. I am trying to help you.",
-    delay: 2800,
+    text: "An OTP just arrived on your phone. Tell me the number. Quickly, sir — the window is only 60 seconds.",
+    delay: 2000,
   },
 ];
 
@@ -202,12 +195,11 @@ export function CallShield() {
     await new Promise((r) => setTimeout(r, 800));
     setVerdict({
       scam: true,
-      confidence: 94,
+      confidence: 97,
       tactics: [
-        "Impersonation — Fake bank official",
-        "Urgency creation (account block threat)",
-        "OTP phishing attempt",
-        "Debit card number extraction",
+        "Impersonation — posed as SBI fraud team",
+        "Card number extraction attempt",
+        "OTP phishing under time pressure",
       ],
     });
     setCallState("verdict");
