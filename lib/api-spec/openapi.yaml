@@ -1,15 +1,16 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Scam Honeypot AI API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: honeypot
+    description: Honeypot scam detection and engagement operations
 paths:
   /healthz:
     get:
@@ -24,6 +25,98 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /honeypot/analyze:
+    post:
+      operationId: analyzeMessage
+      tags: [honeypot]
+      summary: Analyze an incoming message for scam detection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeMessageBody"
+      responses:
+        "200":
+          description: Analysis result with scam detection and agent response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeMessageResult"
+  /honeypot/sessions:
+    get:
+      operationId: listSessions
+      tags: [honeypot]
+      summary: List all honeypot sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HoneypotSession"
+  /honeypot/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      tags: [honeypot]
+      summary: Get a specific honeypot session with full conversation history
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session with conversation history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HoneypotSessionDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /honeypot/sessions/{sessionId}/finalize:
+    post:
+      operationId: finalizeSession
+      tags: [honeypot]
+      summary: Finalize a session and send intelligence to GUVI endpoint
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Finalized session with extracted intelligence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalizeSessionResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /honeypot/intelligence:
+    get:
+      operationId: getIntelligence
+      tags: [honeypot]
+      summary: Get all extracted intelligence across all sessions
+      responses:
+        "200":
+          description: Aggregated intelligence data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelligenceBoard"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +126,260 @@ components:
           type: string
       required:
         - status
-
+    AnalyzeMessageBody:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        message:
+          $ref: "#/components/schemas/IncomingMessage"
+        conversationHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationTurn"
+        metadata:
+          $ref: "#/components/schemas/MessageMetadata"
+      required:
+        - sessionId
+        - message
+    IncomingMessage:
+      type: object
+      properties:
+        sender:
+          type: string
+        text:
+          type: string
+        timestamp:
+          type: string
+      required:
+        - sender
+        - text
+        - timestamp
+    ConversationTurn:
+      type: object
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+        timestamp:
+          type: string
+      required:
+        - role
+        - content
+        - timestamp
+    MessageMetadata:
+      type: object
+      properties:
+        channel:
+          type: string
+        language:
+          type: string
+        locale:
+          type: string
+      required:
+        - channel
+        - language
+        - locale
+    AnalyzeMessageResult:
+      type: object
+      properties:
+        status:
+          type: string
+        sessionId:
+          type: string
+        scamDetected:
+          type: boolean
+        scamProbability:
+          type: number
+        scamType:
+          type: string
+        agentReply:
+          type: string
+        extractedIntelligence:
+          $ref: "#/components/schemas/ExtractedIntelligence"
+        engagementMetrics:
+          $ref: "#/components/schemas/EngagementMetrics"
+        agentNotes:
+          type: string
+      required:
+        - status
+        - sessionId
+        - scamDetected
+        - scamProbability
+        - agentReply
+        - extractedIntelligence
+        - engagementMetrics
+    ExtractedIntelligence:
+      type: object
+      properties:
+        bankAccounts:
+          type: array
+          items:
+            type: string
+        upiIds:
+          type: array
+          items:
+            type: string
+        phishingLinks:
+          type: array
+          items:
+            type: string
+        phoneNumbers:
+          type: array
+          items:
+            type: string
+        suspiciousKeywords:
+          type: array
+          items:
+            type: string
+      required:
+        - bankAccounts
+        - upiIds
+        - phishingLinks
+        - phoneNumbers
+        - suspiciousKeywords
+    EngagementMetrics:
+      type: object
+      properties:
+        engagementDurationSeconds:
+          type: integer
+        totalMessagesExchanged:
+          type: integer
+      required:
+        - engagementDurationSeconds
+        - totalMessagesExchanged
+    HoneypotSession:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        status:
+          type: string
+        scamDetected:
+          type: boolean
+        scamType:
+          type: string
+        scamProbability:
+          type: number
+        totalMessages:
+          type: integer
+        startedAt:
+          type: string
+        lastActivityAt:
+          type: string
+        channel:
+          type: string
+      required:
+        - sessionId
+        - status
+        - scamDetected
+        - scamProbability
+        - totalMessages
+        - startedAt
+        - lastActivityAt
+        - channel
+    HoneypotSessionDetail:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        status:
+          type: string
+        scamDetected:
+          type: boolean
+        scamType:
+          type: string
+        scamProbability:
+          type: number
+        startedAt:
+          type: string
+        lastActivityAt:
+          type: string
+        channel:
+          type: string
+        conversation:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationTurn"
+        extractedIntelligence:
+          $ref: "#/components/schemas/ExtractedIntelligence"
+        agentNotes:
+          type: string
+      required:
+        - sessionId
+        - status
+        - scamDetected
+        - scamProbability
+        - startedAt
+        - lastActivityAt
+        - channel
+        - conversation
+        - extractedIntelligence
+    FinalizeSessionResult:
+      type: object
+      properties:
+        status:
+          type: string
+        sessionId:
+          type: string
+        scamDetected:
+          type: boolean
+        engagementMetrics:
+          $ref: "#/components/schemas/EngagementMetrics"
+        extractedIntelligence:
+          $ref: "#/components/schemas/ExtractedIntelligence"
+        agentNotes:
+          type: string
+        guviCallbackStatus:
+          type: string
+      required:
+        - status
+        - sessionId
+        - scamDetected
+        - engagementMetrics
+        - extractedIntelligence
+        - agentNotes
+        - guviCallbackStatus
+    IntelligenceBoard:
+      type: object
+      properties:
+        totalSessions:
+          type: integer
+        scamSessionsCount:
+          type: integer
+        allBankAccounts:
+          type: array
+          items:
+            type: string
+        allUpiIds:
+          type: array
+          items:
+            type: string
+        allPhishingLinks:
+          type: array
+          items:
+            type: string
+        allPhoneNumbers:
+          type: array
+          items:
+            type: string
+        topKeywords:
+          type: array
+          items:
+            type: string
+      required:
+        - totalSessions
+        - scamSessionsCount
+        - allBankAccounts
+        - allUpiIds
+        - allPhishingLinks
+        - allPhoneNumbers
+        - topKeywords
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

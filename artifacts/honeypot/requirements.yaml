@@ -1,0 +1,21 @@
+packages:
+  "framer-motion": "For sleek cyberpunk UI animations, radar sweeps, and glowing transitions"
+  "date-fns": "For formatting session timestamps"
+  "lucide-react": "For crisp, modern icons"
+  "clsx": "For conditional class merging"
+  "tailwind-merge": "For conditional class merging"
+
+images:
+  - path: "artifacts/honeypot/public/images/cyber-bg.png"
+    description: "Abstract digital grid background with glowing neon cyan and blue nodes, dark navy space, subtle matrix lines, cybersecurity theme"
+    aspect_ratio: "16:9"
+  - path: "artifacts/honeypot/public/images/hacker-avatar.png"
+    description: "Minimalist glowing neon red wireframe silhouette of a hooded figure, black background, cyber threat icon"
+    aspect_ratio: "1:1"
+  - path: "artifacts/honeypot/public/images/ai-avatar.png"
+    description: "Futuristic artificial intelligence glowing core orb in neon blue and cyan, high tech, dark background"
+    aspect_ratio: "1:1"
+
+notes:
+  - Using generated API hooks from @workspace/api-client-react
+  - Simulating OmniDimension voice widget via window.OmniDim.speak() placeholder

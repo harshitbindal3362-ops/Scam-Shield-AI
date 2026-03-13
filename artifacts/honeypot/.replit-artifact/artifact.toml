@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Scam Honeypot AI"
+version = "1.0.0"
+id = "artifacts/honeypot"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+localPort = 23614
+name = "web"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/honeypot run dev"
+
+[services.env]
+PORT = "23614"
+BASE_PATH = "/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/honeypot", "run", "build"]
+publicDir = "artifacts/honeypot/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
