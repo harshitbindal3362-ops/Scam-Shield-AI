@@ -5,25 +5,60 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// OmniDimension integration
+// ─── OmniDimension types ────────────────────────────────────────────────────
+
 declare global {
   interface Window {
     OmniDim?: { speak: (text: string) => void };
+    omnidimWidget?: { speak?: (text: string) => void };
+    OmniDimWidget?: { speak?: (text: string) => void };
+    _omniDimQueue?: string[];
+    _omniDimOnReady?: (widget: any) => void;
   }
 }
 
+// ─── Agent voice via OmniDimension (real human-quality AI voice) ────────────
+
+/** Estimate reading duration in ms for a piece of text. */
+function estimateDuration(text: string): number {
+  // Average speaking pace ~140 wpm → ~700ms per word
+  const words = text.trim().split(/\s+/).length;
+  return Math.max(2500, words * 650);
+}
+
+/** Is the real OmniDim widget loaded and exposing speak()? */
+function omniDimAvailable(): boolean {
+  return (
+    (!!window.omnidimWidget && typeof window.omnidimWidget.speak === "function") ||
+    (!!window.OmniDimWidget && typeof window.OmniDimWidget.speak === "function")
+  );
+}
+
+/**
+ * Speak agent text using OmniDimension's real AI voice.
+ * Returns a Promise that resolves when the estimated speech duration elapses.
+ * Falls back to browser TTS if OmniDim is not loaded.
+ */
+export function speakAgent(text: string): Promise<void> {
+  // Try real OmniDim widget first
+  if (omniDimAvailable()) {
+    const widget = window.omnidimWidget || window.OmniDimWidget;
+    widget!.speak!(text);
+    // OmniDim doesn't fire an end event via JS, so wait estimated time
+    return new Promise((resolve) => setTimeout(resolve, estimateDuration(text)));
+  }
+
+  // OmniDim not ready — use browser TTS as fallback (agent profile)
+  return speakBrowser(text, "agent");
+}
+
+/** Legacy helper used by session detail page. */
 export function playVoice(text: string) {
-  if (window.OmniDim && typeof window.OmniDim.speak === "function") {
-    window.OmniDim.speak(text);
-  } else {
-    speakBrowser(text, "agent");
-  }
+  speakAgent(text).catch(() => {});
 }
 
-// ─── Voice selection ─────────────────────────────────────────────────────────
+// ─── Browser Speech Synthesis (scammer side + agent fallback) ────────────────
 
-/** Pick the best available voice for a role.
- *  Preference order: Google Neural > Google > named high-quality > any. */
 function pickVoice(
   voices: SpeechSynthesisVoice[],
   role: "scammer" | "agent"
@@ -31,21 +66,19 @@ function pickVoice(
   if (!voices.length) return null;
 
   if (role === "scammer") {
-    // Want: confident, clear male — Google US English Male is best
     return (
       voices.find((v) => v.name === "Google UK English Male") ||
       voices.find((v) => v.name === "Google US English") ||
       voices.find((v) => /google/i.test(v.name) && /en/i.test(v.lang)) ||
       voices.find((v) => /microsoft.*david|microsoft.*mark|microsoft.*guy/i.test(v.name)) ||
       voices.find((v) => /^(Alex|Daniel|Fred|Thomas)$/i.test(v.name)) ||
-      voices.find((v) => /en-US|en-GB/i.test(v.lang) && !/(Zira|Hazel|Susan)/i.test(v.name)) ||
+      voices.find((v) => /en-US|en-GB/i.test(v.lang)) ||
       voices[0]
     );
   } else {
-    // Want: warm, slightly different timbre from scammer
+    // Agent fallback — prefer a distinctly different voice from scammer
     return (
       voices.find((v) => v.name === "Google UK English Female") ||
-      voices.find((v) => v.name === "Google हिन्दी") ||
       voices.find((v) => /google/i.test(v.name) && /en-IN|hi/i.test(v.lang)) ||
       voices.find((v) => /rishi|veena|lekha/i.test(v.name)) ||
       voices.find((v) => /microsoft.*zira|microsoft.*hazel/i.test(v.name)) ||
@@ -56,10 +89,7 @@ function pickVoice(
   }
 }
 
-// ─── Core speak function ─────────────────────────────────────────────────────
-
-/** Speak text and return a Promise that resolves when done.
- *  role changes voice character and delivery style. */
+/** Speak text with browser's built-in TTS. Returns Promise that resolves on end. */
 export function speakBrowser(
   text: string,
   role: "agent" | "scammer"
@@ -71,45 +101,35 @@ export function speakBrowser(
 
     const utter = new SpeechSynthesisUtterance(text);
 
-    // Natural delivery settings — keep close to 1.0 for human feel
     if (role === "scammer") {
-      utter.rate  = 1.05;   // confident, controlled, slightly brisk
-      utter.pitch = 1.0;    // neutral — don't sound like a cartoon
+      utter.rate  = 1.05;
+      utter.pitch = 1.0;
       utter.volume = 1.0;
     } else {
-      utter.rate  = 0.93;   // slightly slower, hesitant
-      utter.pitch = 0.95;   // slightly warmer / lower
+      utter.rate  = 0.93;
+      utter.pitch = 0.95;
       utter.volume = 1.0;
     }
 
-    const applyVoice = () => {
+    const applyAndSpeak = () => {
       const voices = window.speechSynthesis.getVoices();
       const v = pickVoice(voices, role);
       if (v) utter.voice = v;
+
+      const timeout = setTimeout(() => { window.speechSynthesis.cancel(); resolve(); }, 20000);
+      utter.onend  = () => { clearTimeout(timeout); resolve(); };
+      utter.onerror = () => { clearTimeout(timeout); resolve(); };
+      window.speechSynthesis.speak(utter);
     };
 
     const loaded = window.speechSynthesis.getVoices();
     if (loaded.length) {
-      applyVoice();
-      doSpeak();
+      applyAndSpeak();
     } else {
-      // Chrome loads voices async on first call
-      window.speechSynthesis.addEventListener("voiceschanged", function handler() {
-        window.speechSynthesis.removeEventListener("voiceschanged", handler);
-        applyVoice();
-        doSpeak();
+      window.speechSynthesis.addEventListener("voiceschanged", function h() {
+        window.speechSynthesis.removeEventListener("voiceschanged", h);
+        applyAndSpeak();
       });
-    }
-
-    function doSpeak() {
-      const timeout = setTimeout(() => {
-        window.speechSynthesis.cancel();
-        resolve();
-      }, 20000);
-
-      utter.onend  = () => { clearTimeout(timeout); resolve(); };
-      utter.onerror = () => { clearTimeout(timeout); resolve(); };
-      window.speechSynthesis.speak(utter);
     }
   });
 }

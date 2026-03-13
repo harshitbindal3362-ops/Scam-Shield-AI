@@ -4,7 +4,7 @@ import {
   PhoneCall, PhoneOff, Shield, Mic, Volume2, VolumeX,
   AlertTriangle, CheckCircle, FileText, Download,
 } from "lucide-react";
-import { cn, speakBrowser, stopSpeech } from "@/lib/utils";
+import { cn, speakAgent, speakBrowser, stopSpeech } from "@/lib/utils";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
@@ -106,7 +106,13 @@ export function CallShield() {
   const speak = async (text: string, role: "scammer" | "agent") => {
     if (!audioEnabled) return;
     setSpeakingRole(role);
-    await speakBrowser(text, role);
+    if (role === "agent") {
+      // Use OmniDimension real AI voice for the agent; falls back to browser TTS
+      await speakAgent(text);
+    } else {
+      // Scammer: browser TTS with a distinct voice
+      await speakBrowser(text, "scammer");
+    }
     if (!isCancelled.current) setSpeakingRole(null);
   };
 

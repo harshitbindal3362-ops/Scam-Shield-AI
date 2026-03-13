@@ -10,19 +10,52 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
     <script>
-      window.omnidimSettings = {
-        agentId: "YOUR_AGENT_ID",
-        triggerMode: "programmatic",
-        voice: "YOUR_SELECTED_VOICE_ID"
-      };
-      window.OmniDim = window.OmniDim || {
-        speak: function(text) {
-          console.log("[OmniDim Mock] Speaking:", text);
+      // Bridge: expose window.OmniDim.speak() so our app can call it.
+      // Once the real widget loads it may override this, or we proxy through it.
+      window.OmniDim = window.OmniDim || {};
+
+      window._omniDimQueue = window._omniDimQueue || [];
+
+      // Called by our app to make the AI voice speak a line.
+      window.OmniDim.speak = function(text) {
+        if (text && typeof text === "string") {
+          // Try the widget's native TTS method if it has been injected
+          if (window.omnidimWidget && typeof window.omnidimWidget.speak === "function") {
+            window.omnidimWidget.speak(text);
+            return;
+          }
+          // Try other common OmniDim API surface
+          if (window.OmniDimWidget && typeof window.OmniDimWidget.speak === "function") {
+            window.OmniDimWidget.speak(text);
+            return;
+          }
+          // Queue it — widget may not be ready yet
+          window._omniDimQueue.push(text);
+          console.log("[OmniDim] Queued for speak:", text);
         }
       };
+
+      // When widget loads and registers itself, drain the queue
+      window._omniDimOnReady = function(widget) {
+        window.omnidimWidget = widget;
+        // Override speak to use the real widget
+        window.OmniDim.speak = function(text) {
+          if (widget && typeof widget.speak === "function") {
+            widget.speak(text);
+          }
+        };
+        // Drain any queued speech
+        (window._omniDimQueue || []).forEach(function(t) {
+          if (typeof widget.speak === "function") widget.speak(t);
+        });
+        window._omniDimQueue = [];
+      };
     </script>
-    <script src="https://cdn.omnidimension.io/widget.js" async></script>
+
+    <!-- Real OmniDimension voice widget -->
+    <script id="omnidimension-web-widget" async src="https://omnidim.io/web_widget.js?secret_key=e7dcf5afbfa749690addd1fd87da745e"></script>
   </head>
   <body>
     <div id="root"></div>
