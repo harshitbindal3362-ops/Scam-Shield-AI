@@ -4,7 +4,7 @@ import {
   PhoneCall, PhoneOff, Shield, Mic, Volume2, VolumeX,
   AlertTriangle, CheckCircle, FileText, Bot,
 } from "lucide-react";
-import { cn, speakBrowser, stopSpeech } from "@/lib/utils";
+import { cn, speakElevenLabs, stopSpeech } from "@/lib/utils";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
@@ -167,13 +167,14 @@ export function CallShield() {
   const playScammer = async (text: string) => {
     if (!audioEnabled) return;
     setSpeakingRole("scammer");
-    await speakBrowser(text, "scammer");
+    await speakElevenLabs(text, "scammer");
     if (!isCancelled.current) setSpeakingRole(null);
   };
 
-  const markAgentSpeaking = async (durationMs: number) => {
+  const playAgent = async (text: string) => {
+    if (!audioEnabled) return;
     setSpeakingRole("agent");
-    await new Promise((r) => setTimeout(r, durationMs));
+    await speakElevenLabs(text, "agent");
     if (!isCancelled.current) setSpeakingRole(null);
   };
 
@@ -251,13 +252,11 @@ export function CallShield() {
       addTurn("agent", agentReply);
       conversationHistory.push({ role: "agent", content: agentReply, timestamp: new Date().toISOString() });
 
-      // Tell OmniDim iframe to speak this response
+      // Also send to OmniDim iframe as context
       sendToOmniDim(iframeRef.current, scammerText, agentReply);
 
-      // Show "agent speaking" state while OmniDim speaks (~650ms per word)
-      const words = agentReply.trim().split(/\s+/).length;
-      const estimatedMs = Math.max(2500, words * 650);
-      await markAgentSpeaking(estimatedMs);
+      // ElevenLabs speaks the agent reply — waits until audio finishes
+      await playAgent(agentReply);
       if (isCancelled.current) return;
 
       await new Promise((r) => setTimeout(r, 700));
