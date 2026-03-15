@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { honeypotSessions } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { textToSpeech } from "@workspace/integrations-openai-ai-server/audio";
 import {
   detectScamProbability,
   detectScamType,
@@ -333,6 +334,31 @@ router.get("/intelligence", async (_req, res) => {
   } catch (err) {
     console.error("Error in GET /intelligence:", err);
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── Text-to-Speech via gpt-audio ─────────────────────────────────────────────
+// Called by the frontend CallShield to generate natural-sounding AI voices.
+// voice="onyx"  → deep male (agent, Ramesh Kumar)
+// voice="echo"  → assertive male (scammer)
+router.post("/tts", async (req, res) => {
+  const { text, role } = req.body as { text?: string; role?: "agent" | "scammer" };
+
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    return res.status(400).json({ error: "text is required" });
+  }
+
+  const voice = role === "scammer" ? "echo" : "onyx";
+
+  try {
+    const audioBuffer = await textToSpeech(text.trim(), voice, "mp3");
+    res.set("Content-Type", "audio/mpeg");
+    res.set("Content-Length", String(audioBuffer.length));
+    res.set("Cache-Control", "no-store");
+    return res.send(audioBuffer);
+  } catch (err: any) {
+    console.error("[TTS] Error generating speech:", err?.message ?? err);
+    return res.status(500).json({ error: "TTS generation failed", detail: String(err?.message ?? err) });
   }
 });
 
